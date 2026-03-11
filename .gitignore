@@ -7,15 +7,21 @@ mp_env/
 venv/
 env/
 
-dataset/
-checkpoints/
-benchmark_output/
+.idea/
 
-*.pth
-*.pt
-*.pkl
-*.tflite
-*.h5
+# 暫時不忽略 semester1 共同資料夾
+# dataset/
+# checkpoints/
+# benchmark_output/
 
+# 暫時不忽略 semester1 共同模型/權重
+# *.pth
+# *.pt
+# *.pkl
+# *.tflite
+# *.h5
+
+# 個人或後續分析輸出可先忽略
 *_analysis.csv
 *misclassified*.csv
+test_prediction_analysis_original_only.csv
