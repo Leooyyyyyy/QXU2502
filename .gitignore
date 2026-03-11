@@ -9,19 +9,20 @@ env/
 
 .idea/
 
-# 暫時不忽略 semester1 共同資料夾
-# dataset/
-# checkpoints/
-# benchmark_output/
+# large data
+dataset/
+checkpoints/
+benchmark_output/
 
-# 暫時不忽略 semester1 共同模型/權重
-# *.pth
-# *.pt
-# *.pkl
-# *.tflite
-# *.h5
+# model
+*.pth
+*.pt
+*.pkl
+*.h5
 
-# 個人或後續分析輸出可先忽略
-*_analysis.csv
-*misclassified*.csv
-test_prediction_analysis_original_only.csv
+# generated analysis outputs
+*.csv
+
+# optional: keep local-only experiment scripts out of repo
+# sem2_main.py
+# sem2_train.py
