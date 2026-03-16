@@ -225,3 +225,66 @@ class SharedMLP(nn.Module):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+
+
+class ThreeStageSharedMLP(nn.Module):
+    """
+    Shared backbone with three heads:
+    1. posture classification
+    2. posture-specific correctness
+    3. posture-specific negative subtype classification
+    """
+
+    def __init__(self, num_postures: int, max_negative_subtypes: int, dropout_p: float = 0.):
+        super().__init__()
+
+        self.num_postures = num_postures
+        self.max_negative_subtypes = max_negative_subtypes
+
+        self.conv1 = nn.Conv1d(in_channels=4, out_channels=16, kernel_size=1, stride=1, padding=0)
+        self.conv2 = nn.Conv1d(in_channels=16, out_channels=16, kernel_size=1, stride=1, padding=0)
+
+        self.dropout = nn.Dropout(p=dropout_p)
+
+        self.fc1 = nn.Linear(16 * 33, 256)
+        self.fc2 = nn.Linear(256, 128)
+
+        self.posture_head = nn.Linear(128, num_postures)
+        self.correctness_head = nn.Linear(128, num_postures)
+        self.negative_subtype_head = nn.Linear(128, num_postures * max_negative_subtypes)
+
+        self._init_weights()
+
+    def forward(self, x):
+        x = x.clone()
+        x[..., 3] = 0
+
+        x = x.transpose(1, 2)
+        x = F.leaky_relu(self.conv1(x))
+        x = F.leaky_relu(self.conv2(x))
+        x = self.dropout(x)
+
+        x = torch.flatten(x, start_dim=1)
+        x = F.leaky_relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.leaky_relu(self.fc2(x))
+        x = self.dropout(x)
+
+        posture_logits = self.posture_head(x)
+        correctness_logits = self.correctness_head(x)
+        negative_subtype_logits = self.negative_subtype_head(x).view(
+            x.size(0), self.num_postures, self.max_negative_subtypes
+        )
+
+        return {
+            "posture_logits": posture_logits,
+            "correctness_logits": correctness_logits,
+            "negative_subtype_logits": negative_subtype_logits,
+        }
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv1d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='leaky_relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)

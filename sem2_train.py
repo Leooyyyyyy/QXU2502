@@ -1,521 +1,462 @@
-# %% Terminal commands to set up the environment
-# Environment: Apple M1 Max, macOS 15.0, Python 3.10
-"""
-pip install matplotlib
-pip install mediapipe
-pip install scikit-learn
-pip install torch
-pip install tqdm
-"""
-
-# %% Import necessary modules
-import importlib
 import os
 import pickle
+import warnings
 from collections import Counter
 
 import mediapipe as mp
 import numpy as np
-import torch
 import pandas as pd
+import torch
 from PIL import Image
 from matplotlib import pyplot as plt
 from sklearn.metrics import ConfusionMatrixDisplay
 from sklearn.metrics import confusion_matrix
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+from torch.utils.data import Subset
 from torch.utils.data import WeightedRandomSampler
-from torch.utils.data import random_split
 from tqdm import tqdm
 
 import models
+from stage3_utils import build_dataset_entries
+from stage3_utils import normalize_keypoints
 
-# %% [PREPROC] Load dataset images into NumPy arrays
-if (
-    os.path.exists("blazepose_results.pkl")
-    and os.path.exists("label_list.pkl")
-    and os.path.exists("image_path_list.pkl")
-):
-    print("Loading cached preprocessing results...")
+warnings.filterwarnings("ignore")
 
-    with open("blazepose_results.pkl", 'rb') as f:
-        blazepose_results = pickle.load(f)
+DATASET_BASE_PATH = "./dataset"
+CACHE_PREFIX = "stage3"
+CHECKPOINT_PATH = "./checkpoints/three_stage_latest.pth"
 
-    with open("label_list.pkl", 'rb') as f:
-        label_list = pickle.load(f)
 
-    with open("image_path_list.pkl", 'rb') as f:
-        image_path_list = pickle.load(f)
+def load_or_build_preprocessed_dataset():
+    cache_paths = {
+        "keypoints": f"{CACHE_PREFIX}_blazepose_results.pkl",
+        "labels": f"{CACHE_PREFIX}_label_list.pkl",
+        "image_paths": f"{CACHE_PREFIX}_image_path_list.pkl",
+        "metadata": f"{CACHE_PREFIX}_metadata.pkl",
+    }
 
-else:
-    print("Cached files not found. Running preprocessing...")
+    if all(os.path.exists(path) for path in cache_paths.values()):
+        with open(cache_paths["keypoints"], "rb") as f:
+            keypoints = pickle.load(f)
+        with open(cache_paths["labels"], "rb") as f:
+            labels = pickle.load(f)
+        with open(cache_paths["image_paths"], "rb") as f:
+            image_paths = pickle.load(f)
+        with open(cache_paths["metadata"], "rb") as f:
+            metadata = pickle.load(f)
+        print("Loaded cached stage-3 preprocessing artifacts.")
+        return np.array(keypoints), labels, image_paths, metadata
 
-    postures: list[str] = ['downdog', 'plank', 'side_plank', 'warrior_ii']
-    dataset_base_path: str = "./dataset"
+    entries, metadata = build_dataset_entries(DATASET_BASE_PATH)
+    image_list = []
+    image_path_list = []
+    label_list = []
 
-    image_list: list[np.ndarray] = []
-    label_list: list[list[int]] = []
-    image_path_list: list[str] = []
+    for entry in entries:
+        image = Image.open(entry["image_path"])
+        image_rgb = image.convert("RGB")
+        image_np = np.array(image_rgb)
 
-    for posture_class, posture_name in enumerate(postures):
-        for correctness, subfolder_name in enumerate(['negative', 'positive']):
-            folder_path: str = os.path.join(dataset_base_path, posture_name, subfolder_name)
-            filenames: list[str] = sorted(os.listdir(folder_path))
+        image_list.append(image_np)
+        image_path_list.append(entry["image_path"])
+        label_list.append([entry["posture_idx"], entry["correctness"], entry["negative_subtype_idx"]])
 
-            for filename in filenames:
-                if filename.split('.')[-1].lower() not in ['jpeg', 'jpg', 'png']:
-                    continue
-
-                filepath: str = os.path.join(folder_path, filename)
-                image = Image.open(filepath)
-                image_rgb = image.convert('RGB')
-                image_np = np.array(image_rgb)
-
-                image_list.append(image_np)
-                label_list.append([posture_class, correctness])
-                image_path_list.append(filepath)
-
-    # %% [PREPROC] Apply horizontal flip as an augmentation
     original_images = image_list[:]
     original_paths = image_path_list[:]
     original_labels = label_list[:]
 
     for image_np in original_images:
         image_list.append(np.fliplr(image_np))
+    for image_path in original_paths:
+        image_path_list.append(image_path + " [flipped]")
+    label_list.extend(original_labels)
 
-    for path in original_paths:
-        image_path_list.append(path + " [flipped]")
-
-    label_list *= 2
-
-    # %% [PREPROC] Pass images to BlazePose to extract keypoints
-    blazepose_results: list[list[list[float]]] = []  # List to store keypoints for all images
-
+    blazepose_results = []
     mp_pose = mp.solutions.pose
-    with mp_pose.Pose(static_image_mode=True,
-                      model_complexity=1) as pose:
-        for image_np in tqdm(image_list):
-            # Perform pose estimation on the current image
+    with mp_pose.Pose(static_image_mode=True, model_complexity=1) as pose:
+        for image_np in tqdm(image_list, desc="Extracting BlazePose keypoints"):
             result = pose.process(image_np)
-
-            # If no landmarks are detected, append an empty list for this image
             if not result.pose_landmarks:
                 blazepose_results.append([])
                 continue
 
-            keypoints: list[list[float]] = []  # List to store keypoints for this image
-
-            # Extract keypoints (x, y, z, visibility) for each detected landmark
+            keypoints = []
             for landmark in result.pose_landmarks.landmark:
-                x = landmark.x  # Horizontal axis (0 is the left)
-                y = landmark.y  # Vertical axis (0 is the top)
-                z = landmark.z
-                confidence = landmark.visibility
-
-                keypoints.append([x, y, z, confidence])
-
-            # Append the keypoints for this image to the results list
+                keypoints.append([landmark.x, landmark.y, landmark.z, landmark.visibility])
             blazepose_results.append(keypoints)
 
-    # %% [PREPROC] Filter out images that have no detected landmarks
-    for i in reversed(range(len(blazepose_results))):
-        if not blazepose_results[i]:
-            del blazepose_results[i]
-            del image_list[i]
-            del image_path_list[i]
-            del label_list[i]
+    for idx in reversed(range(len(blazepose_results))):
+        if blazepose_results[idx]:
+            continue
+        del blazepose_results[idx]
+        del image_path_list[idx]
+        del label_list[idx]
 
-    # %% [PREPROC] Store valid BlazePose results and corresponding labels in a file
-    with open("blazepose_results.pkl", 'wb') as f:
-        pickle.dump(blazepose_results, f)
+    blazepose_results_np = np.array(blazepose_results)
+    for result_np in blazepose_results_np:
+        normalize_keypoints(result_np)
 
-    with open("label_list.pkl", 'wb') as f:
+    with open(cache_paths["keypoints"], "wb") as f:
+        pickle.dump(blazepose_results_np, f)
+    with open(cache_paths["labels"], "wb") as f:
         pickle.dump(label_list, f)
-
-    with open("image_path_list.pkl", 'wb') as f:
+    with open(cache_paths["image_paths"], "wb") as f:
         pickle.dump(image_path_list, f)
+    with open(cache_paths["metadata"], "wb") as f:
+        pickle.dump(metadata, f)
 
-# %% Restore stored results and labels
-with open("blazepose_results.pkl", 'rb') as f:
-    blazepose_results = pickle.load(f)
-
-with open("label_list.pkl", 'rb') as f:
-    label_list = pickle.load(f)
-
-with open("image_path_list.pkl", 'rb') as f:
-    image_path_list = pickle.load(f)
-
-# %% Normalize the BlazePose results: (x, y) using MinMaxScaler and (z) using L2 normalization
-blazepose_results_np = np.array(blazepose_results)
-
-for result_np in blazepose_results_np:
-    x, y, z, confidence = result_np.T
-
-    # Normalize x and y to the range [0, 1]
-    scaler = MinMaxScaler()
-    x[:] = scaler.fit_transform(x.reshape(-1, 1)).ravel()  # Normalize x
-    y[:] = scaler.fit_transform(y.reshape(-1, 1)).ravel()  # Normalize y
-
-    # Normalize the z column to a unit vector
-    z /= np.linalg.norm(z)
+    print("Built and cached stage-3 preprocessing artifacts.")
+    return blazepose_results_np, label_list, image_path_list, metadata
 
 
-# %% Define the Dataset class
 class YogaPoseDataset(Dataset):
     def __init__(self, keypoints_np, labels_):
         self.keypoints_tensor = torch.tensor(keypoints_np, dtype=torch.float32)
-        self.labels = torch.tensor(labels_)
+        self.labels = torch.tensor(labels_, dtype=torch.long)
 
     def __len__(self):
         return len(self.keypoints_tensor)
 
     def __getitem__(self, idx):
-        keypoints = self.keypoints_tensor[idx]  # Shape (33, 4)
-        label = self.labels[idx]  # Shape (2,): [class index, correctness boolean]
-        return keypoints, label
+        return self.keypoints_tensor[idx], self.labels[idx]
 
 
-# %% Define a function to split the dataset
 def split_dataset(dataset, train_ratio=0.7, val_ratio=0.15, seed=2024):
-    # Set the random seed for reproducibility
-    torch.manual_seed(seed)
+    labels = [tuple(label.tolist()) for label in dataset.labels]
+    indices = np.arange(len(dataset))
 
-    # Calculate the lengths for each subset
-    dataset_size = len(dataset)
-    train_size = int(dataset_size * train_ratio)
-    val_size = int(dataset_size * val_ratio)
-    test_size = dataset_size - train_size - val_size
+    train_indices, temp_indices = train_test_split(
+        indices,
+        test_size=(1 - train_ratio),
+        random_state=seed,
+        stratify=labels,
+    )
 
-    # Split the dataset using random_split
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+    temp_labels = [labels[idx] for idx in temp_indices]
+    val_ratio_within_temp = val_ratio / (1 - train_ratio)
 
-    return train_dataset, val_dataset, test_dataset
+    val_indices, test_indices = train_test_split(
+        temp_indices,
+        test_size=(1 - val_ratio_within_temp),
+        random_state=seed,
+        stratify=temp_labels,
+    )
 
-
-# %% Create the dataset objects
-dataset = YogaPoseDataset(blazepose_results_np, label_list)
-train_dataset, val_dataset, test_dataset = split_dataset(dataset)
-
-posture_names = ['Down Dog', 'Plank', 'Side Plank', 'Warrior II']
-feedback_names = ['Incorrect', 'Correct']
-
-test_indices = test_dataset.indices
-
-test_image_paths = [image_path_list[i] for i in test_indices]
-test_labels = [label_list[i] for i in test_indices]
-
-test_rows = []
-for idx, image_path, label in zip(test_indices, test_image_paths, test_labels):
-    true_posture_idx = int(label[0])
-    true_feedback_idx = int(label[1])
-
-    is_flipped = image_path.endswith(" [flipped]")
-    original_image_path = image_path.replace(" [flipped]", "")
-
-    test_rows.append({
-        "original_index": idx,
-        "image_path": image_path,
-        "original_image_path": original_image_path,
-        "is_flipped": int(is_flipped),
-        "true_posture_idx": true_posture_idx,
-        "true_posture": posture_names[true_posture_idx],
-        "true_feedback_idx": true_feedback_idx,
-        "true_feedback": feedback_names[true_feedback_idx],
-    })
-
-df_test_paths = pd.DataFrame(test_rows)
-df_test_paths.to_csv("test_dataset_paths.csv", index=False)
-print("Saved test_dataset_paths.csv")
-# raise SystemExit("test_dataset_paths.csv exported successfully")
-
-# %% Create a weighted sampler for the training dataset to address imbalance
-# Convert labels from tensors to tuples
-train_dataset_labels = [tuple(label.tolist()) for _, label in train_dataset]
-
-# Count occurrences of each label
-label_counts = Counter(train_dataset_labels)
-
-# Assign inverse frequency as weight
-weights = [label_counts[label_tuple] ** -1 for label_tuple in train_dataset_labels]
-
-# Create the weighted sampler
-train_sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
-
-# %% Create DataLoader for each set
-train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler)
-val_loader = DataLoader(val_dataset, batch_size=32)
-test_loader = DataLoader(test_dataset, batch_size=32)
-
-# %% Get available acceleration device
-device = torch.device('mps' if torch.backends.mps.is_available()
-                      else 'cuda' if torch.cuda.is_available() else 'cpu')
-
-# %% Instantiate the model [Configurable]
-importlib.reload(models)
-model = models.SharedMLP(dropout_p=0.1)
-model = model.to(device)
-print("No. of params (including bias):", sum(p.numel() for p in model.parameters()))
+    return (
+        Subset(dataset, train_indices.tolist()),
+        Subset(dataset, val_indices.tolist()),
+        Subset(dataset, test_indices.tolist()),
+    )
 
 
-# %% Define the loss function
-def loss_func(output_batch, label_batch):
-    # Split the label batch into posture_class and correctness
-    posture_class, correctness = label_batch.T
-
-    # Loss for the posture class
-    loss1 = nn.CrossEntropyLoss()(output_batch[:, :, 0], posture_class)
-
-    # Loss for the correctness
-    logits = output_batch[:, :, 1].gather(dim=1, index=posture_class.unsqueeze(dim=1))
-    loss2 = nn.BCEWithLogitsLoss()(logits, correctness.unsqueeze(dim=1).to(torch.float32))
-
-    # Combine both losses
-    total_loss = loss1 + loss2
-
-    return total_loss
+def mask_invalid_negative_logits(logits, posture_indices, subtype_counts_by_posture):
+    masked_logits = logits.clone()
+    for row_idx, posture_idx in enumerate(posture_indices.tolist()):
+        valid_count = subtype_counts_by_posture[posture_idx]
+        if valid_count < masked_logits.size(1):
+            masked_logits[row_idx, valid_count:] = -1e9
+    return masked_logits
 
 
-# %% Define the optimizer and learning rate scheduler [Configurable]
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=0.00001)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=30)
+def loss_func(outputs, label_batch, subtype_counts_by_posture):
+    posture_class = label_batch[:, 0]
+    correctness = label_batch[:, 1].float()
+    negative_subtype = label_batch[:, 2]
+
+    posture_loss = nn.CrossEntropyLoss()(outputs["posture_logits"], posture_class)
+
+    selected_correctness_logits = outputs["correctness_logits"].gather(1, posture_class.unsqueeze(1))
+    correctness_loss = nn.BCEWithLogitsLoss()(selected_correctness_logits, correctness.unsqueeze(1))
+
+    negative_mask = correctness == 0
+    negative_loss = torch.tensor(0.0, device=posture_class.device)
+    if torch.any(negative_mask):
+        negative_postures = posture_class[negative_mask]
+        negative_targets = negative_subtype[negative_mask]
+        negative_logits = outputs["negative_subtype_logits"][negative_mask]
+        selected_negative_logits = negative_logits[
+            torch.arange(len(negative_postures), device=posture_class.device),
+            negative_postures,
+        ]
+        selected_negative_logits = mask_invalid_negative_logits(
+            selected_negative_logits, negative_postures, subtype_counts_by_posture
+        )
+        negative_loss = nn.CrossEntropyLoss()(selected_negative_logits, negative_targets)
+
+    return posture_loss + correctness_loss + negative_loss
 
 
-# %% Helper function to convert raw model output to predicted labels
-def logits_to_labels(output_batch: torch.tensor) -> torch.tensor:
-    # Get the predicted posture class
-    pred_posture_class = output_batch[:, :, 0].argmax(dim=1, keepdim=True)
+def outputs_to_pred_labels(outputs, subtype_counts_by_posture):
+    posture_logits = outputs["posture_logits"]
+    correctness_logits = outputs["correctness_logits"]
+    negative_logits = outputs["negative_subtype_logits"]
 
-    # Check the predicted correctness (gather the correctness logits and threshold at 0)
-    pred_correctness = output_batch[:, :, 1].gather(dim=1, index=pred_posture_class) > 0
+    pred_posture = posture_logits.argmax(dim=1)
+    selected_correctness_logits = correctness_logits.gather(1, pred_posture.unsqueeze(1)).squeeze(1)
+    pred_correctness = (torch.sigmoid(selected_correctness_logits) > 0.5).long()
 
-    # Stack the predicted posture class and correctness horizontally to form the predicted labels
-    pred_labels = torch.hstack([pred_posture_class, pred_correctness])
+    pred_negative_subtype = torch.full_like(pred_posture, -1)
+    negative_mask = pred_correctness == 0
+    if torch.any(negative_mask):
+        negative_postures = pred_posture[negative_mask]
+        selected_negative_logits = negative_logits[negative_mask][
+            torch.arange(torch.sum(negative_mask), device=pred_posture.device),
+            negative_postures,
+        ]
+        selected_negative_logits = mask_invalid_negative_logits(
+            selected_negative_logits, negative_postures, subtype_counts_by_posture
+        )
+        pred_negative_subtype[negative_mask] = selected_negative_logits.argmax(dim=1)
 
-    return pred_labels
-
-
-# %% Helper function to count the number of correct predictions in a batch
-def count_correct_predictions(output_batch: torch.tensor, label_batch: torch.tensor) -> int:
-    # Convert raw model output to predicted labels
-    pred_labels = logits_to_labels(output_batch)
-
-    # Compare predicted labels with actual labels and count the number of fully correct predictions
-    num_correct = torch.sum(torch.all(pred_labels == label_batch, dim=1)).item()
-
-    return num_correct
-
-
-# %% Helper function to save a checkpoint
-def save_checkpoint():
-    checkpoint_path = f"./checkpoint_epoch_{num_epochs:06d}.pth"
-    torch.save({
-        'num_epochs': num_epochs,
-        'model': model,
-        'optimizer': optimizer,
-        'scheduler': scheduler,
-        'train_losses': train_losses,
-        'val_losses': val_losses,
-        'train_accuracies': train_accuracies,
-        'val_accuracies': val_accuracies,
-    }, checkpoint_path)
-    print(f'\rCheckpoint saved at "{checkpoint_path}"')
+    return torch.stack([pred_posture, pred_correctness, pred_negative_subtype], dim=1)
 
 
-# %% Initialize variables for the main loop
-num_epochs = 0
-train_losses, val_losses = [], []
-train_accuracies, val_accuracies = [], []
+def count_correct_predictions(outputs, labels, subtype_counts_by_posture):
+    pred_labels = outputs_to_pred_labels(outputs, subtype_counts_by_posture)
+    return torch.sum(torch.all(pred_labels == labels, dim=1)).item()
 
-# %% ================ Main Training Loop ================
-# Trim the record lists to avoid length inconsistency caused by a KeyboardInterrupt in the main loop
-train_losses = train_losses[:num_epochs]
-val_losses = val_losses[:num_epochs]
-train_accuracies = train_accuracies[:num_epochs]
-val_accuracies = val_accuracies[:num_epochs]
 
-while scheduler.get_last_lr()[0] > 1e-5:
-    """ Train """
-    model.train()
-    train_loss = 0
-    train_correct = 0
+def label_to_confusion_name(label, posture_names, negative_subtypes_by_posture, posture_dirs):
+    posture_idx, correctness, negative_subtype_idx = label
+    posture_name = posture_names[posture_idx]
+    if correctness == 1:
+        return f"{posture_name} | Correct"
 
-    for inputs, labels in tqdm(train_loader):
-        inputs = inputs.to(device)
-        labels = labels.to(device)
+    posture_dir = posture_dirs[posture_idx]
+    negative_name = negative_subtypes_by_posture[posture_dir][negative_subtype_idx]
+    return f"{posture_name} | Incorrect | {negative_name}"
 
-        # Forward pass
-        outputs = model(inputs)
-        loss = loss_func(outputs, labels)
 
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+def build_weighted_sampler(train_dataset):
+    train_dataset_labels = [tuple(label.tolist()) for _, label in train_dataset]
+    label_counts = Counter(train_dataset_labels)
+    weights = [label_counts[label_tuple] ** -1 for label_tuple in train_dataset_labels]
+    return WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
 
-        # Record loss
-        train_loss += loss.item()
 
-        # Record correct count
-        train_correct += count_correct_predictions(outputs, labels)
+def main():
+    keypoints_np, label_list, image_path_list, metadata = load_or_build_preprocessed_dataset()
 
-    # Calculate average loss and accuracy for the epoch
-    avg_train_loss = train_loss / len(train_loader)
-    avg_train_accuracy = train_correct / len(train_loader.dataset)
+    dataset = YogaPoseDataset(keypoints_np, label_list)
+    train_dataset, val_dataset, test_dataset = split_dataset(dataset)
 
-    # Append and store the values
-    train_losses.append(avg_train_loss)
-    train_accuracies.append(avg_train_accuracy)
+    test_rows = []
+    for idx in test_dataset.indices:
+        image_path = image_path_list[idx]
+        label = label_list[idx]
+        posture_idx, correctness, negative_subtype_idx = label
+        posture_dir = metadata["posture_dirs"][posture_idx]
+        negative_subtype = None
+        if correctness == 0:
+            negative_subtype = metadata["negative_subtypes_by_posture"][posture_dir][negative_subtype_idx]
 
-    """ Validation """
-    model.eval()
-    val_loss = 0
-    val_correct = 0
+        test_rows.append({
+            "original_index": idx,
+            "image_path": image_path,
+            "original_image_path": image_path.replace(" [flipped]", ""),
+            "is_flipped": int(image_path.endswith(" [flipped]")),
+            "true_posture_idx": posture_idx,
+            "true_posture": metadata["posture_names"][posture_idx],
+            "true_feedback_idx": correctness,
+            "true_feedback": "Correct" if correctness == 1 else "Incorrect",
+            "true_negative_subtype_idx": negative_subtype_idx,
+            "true_negative_subtype": negative_subtype,
+        })
 
-    with torch.no_grad():
-        for inputs, labels in val_loader:
+    pd.DataFrame(test_rows).to_csv("test_dataset_paths.csv", index=False)
+    print("Saved test_dataset_paths.csv")
+
+    train_sampler = build_weighted_sampler(train_dataset)
+    train_loader = DataLoader(train_dataset, batch_size=32, sampler=train_sampler)
+    val_loader = DataLoader(val_dataset, batch_size=32)
+    test_loader = DataLoader(test_dataset, batch_size=32)
+
+    device = torch.device(
+        "mps" if torch.backends.mps.is_available()
+        else "cuda" if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    model = models.ThreeStageSharedMLP(
+        num_postures=metadata["num_postures"],
+        max_negative_subtypes=metadata["max_negative_subtypes"],
+        dropout_p=0.1,
+    ).to(device)
+    print("No. of params (including bias):", sum(p.numel() for p in model.parameters()))
+
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=0.00001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=30)
+
+    train_losses = []
+    val_losses = []
+    train_accuracies = []
+    val_accuracies = []
+    num_epochs = 0
+
+    def save_checkpoint():
+        torch.save({
+            "num_epochs": num_epochs,
+            "model": model,
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "train_accuracies": train_accuracies,
+            "val_accuracies": val_accuracies,
+            "metadata": metadata,
+        }, CHECKPOINT_PATH)
+        print(f'Saved checkpoint to "{CHECKPOINT_PATH}"')
+
+    while scheduler.get_last_lr()[0] > 1e-5:
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+
+        for inputs, labels in tqdm(train_loader, desc=f"Epoch {num_epochs + 1} train"):
             inputs = inputs.to(device)
             labels = labels.to(device)
 
-            # Forward pass
             outputs = model(inputs)
-            loss = loss_func(outputs, labels)
+            loss = loss_func(outputs, labels, metadata["subtype_counts_by_posture"])
 
-            # Record loss
-            val_loss += loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-            # Record correct count
-            val_correct += count_correct_predictions(outputs, labels)
+            train_loss += loss.item()
+            train_correct += count_correct_predictions(outputs, labels, metadata["subtype_counts_by_posture"])
 
-    avg_val_loss = val_loss / len(val_loader)
-    avg_val_accuracy = val_correct / len(val_loader.dataset)
+        avg_train_loss = train_loss / len(train_loader)
+        avg_train_accuracy = train_correct / len(train_loader.dataset)
 
-    # Append and store the values
-    val_losses.append(avg_val_loss)
-    val_accuracies.append(avg_val_accuracy)
+        train_losses.append(avg_train_loss)
+        train_accuracies.append(avg_train_accuracy)
 
-    # Increment the number of epochs
-    num_epochs += 1
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
 
-    # Print epoch summary
-    print(f"\rEpoch {num_epochs} | Train Loss: {avg_train_loss:.4f}, Train Accuracy: {avg_train_accuracy:.4f} | "
-          f"Val Loss: {avg_val_loss:.4f}, Val Accuracy: {avg_val_accuracy:.4f}")
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
 
-    # Step the scheduler
-    scheduler.step(avg_val_loss)
-    print("Next Epoch Learning Rate:", scheduler.get_last_lr()[0])
+                outputs = model(inputs)
+                loss = loss_func(outputs, labels, metadata["subtype_counts_by_posture"])
 
-    # Save checkpoint every 20 epochs
-    if num_epochs % 20 == 0:
-        save_checkpoint()
+                val_loss += loss.item()
+                val_correct += count_correct_predictions(outputs, labels, metadata["subtype_counts_by_posture"])
 
-    print()
-else:
+        avg_val_loss = val_loss / len(val_loader)
+        avg_val_accuracy = val_correct / len(val_loader.dataset)
+
+        val_losses.append(avg_val_loss)
+        val_accuracies.append(avg_val_accuracy)
+
+        num_epochs += 1
+        print(
+            f"Epoch {num_epochs} | Train Loss: {avg_train_loss:.4f}, Train Accuracy: {avg_train_accuracy:.4f} | "
+            f"Val Loss: {avg_val_loss:.4f}, Val Accuracy: {avg_val_accuracy:.4f}"
+        )
+
+        scheduler.step(avg_val_loss)
+        print("Next Epoch Learning Rate:", scheduler.get_last_lr()[0])
+
+        if num_epochs % 20 == 0:
+            save_checkpoint()
+
+        if scheduler.get_last_lr()[0] <= 1e-5:
+            break
+
     save_checkpoint()
 
-# %% Plot the loss and accuracy curves
-fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=300)
+    plt.figure(figsize=(12, 6), dpi=220)
+    plt.plot(train_losses, linewidth=2.2, label="Training Loss")
+    plt.plot(val_losses, linewidth=2.2, label="Validation Loss")
+    plt.title("Training and Validation Loss", fontsize=18, pad=14)
+    plt.xlabel("Epochs", fontsize=14)
+    plt.ylabel("Loss", fontsize=14)
+    plt.grid(alpha=0.25)
+    plt.legend(fontsize=13)
+    plt.tight_layout()
+    plt.show()
 
-# Plot the loss curves
-axes[0].plot(train_losses, label='Training Loss')
-axes[0].plot(val_losses, label='Validation Loss')
-axes[0].set_title('Training and Validation Loss')
-axes[0].set_xlabel('Epochs')
-axes[0].set_ylabel('Loss')
-axes[0].legend()
+    plt.figure(figsize=(12, 6), dpi=220)
+    plt.plot(train_accuracies, linewidth=2.2, label="Training Accuracy")
+    plt.plot(val_accuracies, linewidth=2.2, label="Validation Accuracy")
+    plt.title("Training and Validation Accuracy", fontsize=18, pad=14)
+    plt.xlabel("Epochs", fontsize=14)
+    plt.ylabel("Accuracy", fontsize=14)
+    plt.ylim(0, 1.0)
+    plt.grid(alpha=0.25)
+    plt.legend(fontsize=13)
+    plt.tight_layout()
+    plt.show()
 
-# Plot the accuracy curves
-axes[1].plot(train_accuracies, label='Training Accuracy')
-axes[1].plot(val_accuracies, label='Validation Accuracy')
-axes[1].set_title('Training and Validation Accuracy')
-axes[1].set_xlabel('Epochs')
-axes[1].set_ylabel('Accuracy')
-axes[1].legend()
+    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
+    model = checkpoint["model"].to(device).eval()
+    metadata = checkpoint["metadata"]
 
-# Adjust layout
-plt.subplots_adjust(wspace=0.3)
+    test_loss = 0.0
+    test_correct = 0
+    test_true_labels = []
+    test_pred_labels = []
 
-plt.show()
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
 
-# %% Load a checkpoint
-checkpoint_path = "./checkpoints/27.pth"
+            outputs = model(inputs)
+            loss = loss_func(outputs, labels, metadata["subtype_counts_by_posture"])
 
-# Load the checkpoint dictionary
-checkpoint = torch.load(checkpoint_path)
+            test_loss += loss.item()
+            test_correct += count_correct_predictions(outputs, labels, metadata["subtype_counts_by_posture"])
 
-# Restore the states and variables
-num_epochs = checkpoint['num_epochs']
-model = checkpoint['model']
-optimizer = checkpoint['optimizer']
-scheduler = checkpoint['scheduler']
-train_losses = checkpoint['train_losses']
-val_losses = checkpoint['val_losses']
-train_accuracies = checkpoint['train_accuracies']
-val_accuracies = checkpoint['val_accuracies']
+            test_true_labels.extend(labels.tolist())
+            test_pred_labels.extend(outputs_to_pred_labels(outputs, metadata["subtype_counts_by_posture"]).tolist())
 
-print(f'\nCheckpoint loaded from "{checkpoint_path}"')
+    avg_test_loss = test_loss / len(test_loader)
+    avg_test_accuracy = test_correct / len(test_loader.dataset)
+    print(f"Test Loss: {avg_test_loss:.4f}, Test Accuracy: {avg_test_accuracy:.4f}")
 
-# %% Evaluate the model on the test set
-model.eval()
-test_loss = 0
-test_correct = 0
-test_true_labels = []
-test_pred_labels = []
+    class_names = sorted({
+        label_to_confusion_name(label, metadata["posture_names"], metadata["negative_subtypes_by_posture"], metadata["posture_dirs"])
+        for label in label_list
+    })
+    class_to_idx = {name: idx for idx, name in enumerate(class_names)}
 
-with torch.no_grad():
-    for inputs, labels in test_loader:
-        inputs = inputs.to(device)
-        labels = labels.to(device)
+    true_indexes = [
+        class_to_idx[
+            label_to_confusion_name(label, metadata["posture_names"], metadata["negative_subtypes_by_posture"], metadata["posture_dirs"])
+        ]
+        for label in test_true_labels
+    ]
+    pred_indexes = [
+        class_to_idx[
+            label_to_confusion_name(label, metadata["posture_names"], metadata["negative_subtypes_by_posture"], metadata["posture_dirs"])
+        ]
+        for label in test_pred_labels
+    ]
 
-        # Forward pass
-        outputs = model(inputs)
-        loss = loss_func(outputs, labels)
+    conf_matrix = confusion_matrix(true_indexes, pred_indexes, labels=list(range(len(class_names))))
 
-        # Record loss
-        test_loss += loss.item()
-
-        # Record correct count
-        test_correct += count_correct_predictions(outputs, labels)
-
-        # Store true and predicted labels
-        test_true_labels.extend(labels.tolist())
-        test_pred_labels.extend(logits_to_labels(outputs).tolist())
-
-# Calculate the average test loss and accuracy
-avg_test_loss = test_loss / len(test_loader)
-avg_test_accuracy = test_correct / len(test_loader.dataset)
-
-# Print the test results
-print(f"Test Loss: {avg_test_loss:.4f}, Test Accuracy: {avg_test_accuracy:.4f}")
-
-# %% Plot the confusion matrix
-# Construct class names for the confusion matrix
-class_names: list[str] = []
-for validity in ('Correct', 'Incorrect'):
-    for posture_name in ('Down Dog', 'Plank', 'Side Plank', 'Warrior II'):
-        class_names.append(f"{posture_name} ({validity})")
-
-
-# Define a function to map a label to its corresponding class name's index
-def label_to_index(label) -> int:
-    posture_class, correctness = label
-    return posture_class + (0 if correctness == 1 else 4)
+    fig_size = max(14, min(24, len(class_names) * 0.9))
+    fig, ax = plt.subplots(dpi=220, figsize=(fig_size, fig_size))
+    disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix, display_labels=class_names)
+    disp.plot(cmap=plt.cm.Blues, ax=ax, xticks_rotation=60, colorbar=False, values_format="d")
+    ax.set_title("Three-Stage Confusion Matrix on the Test Set", fontsize=18, pad=16)
+    ax.set_xlabel("Predicted Label", fontsize=13, labelpad=12)
+    ax.set_ylabel("True Label", fontsize=13, labelpad=12)
+    ax.tick_params(axis="x", labelsize=10)
+    ax.tick_params(axis="y", labelsize=10)
+    plt.tight_layout()
+    plt.show()
 
 
-# Convert true and predicted labels to indexes
-test_true_indexes = list(map(label_to_index, test_true_labels))
-test_pred_indexes = list(map(label_to_index, test_pred_labels))
-
-# Generate confusion matrix
-conf_matrix = confusion_matrix(test_true_indexes, test_pred_indexes)
-
-# Plot the confusion matrix
-fig, ax = plt.subplots(dpi=300)
-disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix, display_labels=class_names)
-disp.plot(cmap=plt.cm.Blues, ax=ax)
-plt.xticks(rotation=45, ha='right')
-plt.title("Confusion Matrix on the Test Set")
-plt.tight_layout()
-plt.show()
+if __name__ == "__main__":
+    main()
