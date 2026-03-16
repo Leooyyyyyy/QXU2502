@@ -7,18 +7,19 @@ from sklearn.metrics import ConfusionMatrixDisplay
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
-from sem2_train import CHECKPOINT_PATH
-from sem2_train import YogaPoseDataset
-from sem2_train import count_correct_predictions
-from sem2_train import load_or_build_preprocessed_dataset
-from sem2_train import loss_func
-from sem2_train import outputs_to_pred_labels
-from sem2_train import split_dataset
-from sem2_train import label_to_confusion_name
+from runners.sem2_train import YogaPoseDataset
+from runners.sem2_train import count_correct_predictions
+from runners.sem2_train import load_or_build_preprocessed_dataset
+from runners.sem2_train import loss_func
+from runners.sem2_train import outputs_to_pred_labels
+from runners.sem2_train import split_dataset
+from runners.sem2_train import label_to_confusion_name
 
 warnings.filterwarnings("ignore")
 
-OUTPUT_DIR = Path("training_plots")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CHECKPOINT_PATH = PROJECT_ROOT / "checkpoints" / "three_stage_latest.pth"
+OUTPUT_DIR = PROJECT_ROOT / "training_plots"
 
 
 def save_current_figure(filename):

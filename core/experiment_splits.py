@@ -2,8 +2,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset
 
-from yoga_data import load_split_indices
-from yoga_data import save_split_indices
+from core.yoga_data import load_split_indices
+from core.yoga_data import save_split_indices
 
 
 def _labels_for_stratification(labels: list[list[int]]) -> list[str]:

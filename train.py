@@ -1,4 +1,4 @@
-from run_experiment import main
+from runners.run_experiment import main
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ import models
 
 # %% [PREPROC] Load dataset images into NumPy arrays
 postures: list[str] = ['downdog', 'plank', 'side_plank', 'warrior_ii']
-dataset_base_path: str = "./dataset"
+dataset_base_path: str = "../dataset"
 
 image_list: list[np.ndarray] = []  # List to store image NumPy arrays
 label_list: list[list[int]] = []  # List to store labels: [posture_class, correctness]
@@ -111,14 +111,14 @@ for i in reversed(range(len(blazepose_results))):
 with open("blazepose_results.pkl", 'wb') as f:
     pickle.dump(blazepose_results, f)
 
-with open("label_list.pkl", 'wb') as f:
+with open("../label_list.pkl", 'wb') as f:
     pickle.dump(label_list, f)
 
 # %% Restore stored results and labels
 with open("blazepose_results.pkl", 'rb') as f:
     blazepose_results = pickle.load(f)
 
-with open("label_list.pkl", 'rb') as f:
+with open("../label_list.pkl", 'rb') as f:
     label_list = pickle.load(f)
 
 # %% Normalize the BlazePose results: (x, y) using MinMaxScaler and (z) using L2 normalization
@@ -381,7 +381,7 @@ plt.subplots_adjust(wspace=0.3)
 plt.show()
 
 # %% Load a checkpoint
-checkpoint_path = "./checkpoints/27.pth"
+checkpoint_path = "../checkpoints/27.pth"
 
 # Load the checkpoint dictionary
 checkpoint = torch.load(checkpoint_path)

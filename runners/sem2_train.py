@@ -20,15 +20,15 @@ from torch.utils.data import Subset
 from torch.utils.data import WeightedRandomSampler
 from tqdm import tqdm
 
-import models
-from stage3_utils import build_dataset_entries
-from stage3_utils import normalize_keypoints
+from core import models
+from core.stage3_utils import build_dataset_entries
+from core.stage3_utils import normalize_keypoints
 
 warnings.filterwarnings("ignore")
 
-DATASET_BASE_PATH = "./dataset"
+DATASET_BASE_PATH = "../dataset"
 CACHE_PREFIX = "stage3"
-CHECKPOINT_PATH = "./checkpoints/three_stage_latest.pth"
+CHECKPOINT_PATH = "../checkpoints/three_stage_latest.pth"
 
 
 def load_or_build_preprocessed_dataset():
@@ -267,7 +267,7 @@ def main():
             "true_negative_subtype": negative_subtype,
         })
 
-    pd.DataFrame(test_rows).to_csv("test_dataset_paths.csv", index=False)
+    pd.DataFrame(test_rows).to_csv("../test_dataset_paths.csv", index=False)
     print("Saved test_dataset_paths.csv")
 
     train_sampler = build_weighted_sampler(train_dataset)

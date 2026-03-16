@@ -11,8 +11,8 @@ from matplotlib import pyplot as plt
 from numpy import ndarray
 from torch.nn import functional as F
 
-from stage3_utils import normalize_keypoints
-from stage3_utils import parse_true_label_from_path
+from core.stage3_utils import normalize_keypoints
+from core.stage3_utils import parse_true_label_from_path
 
 warnings.filterwarnings("ignore")
 
@@ -149,12 +149,17 @@ def show_image(image_path):
 
 def main():
     image_paths = [
-        "./dataset/warrior_ii/positive/0326.png",
+        "./dataset/downdog/positive/018.png",
+        "./dataset/downdog/negative/0_alignment_issue/010.png",
+
         "./dataset/plank/positive/frame_71.png",
-        "./dataset/plank/positive/frame_293.png",
-        "./dataset/downdog/negative/010.png",
-        "./dataset/warrior_ii/negative/01.png",
-        "./dataset/plank/negative/ba_030.png",
+        "./dataset/plank/negative/0_alignment_issue/011.png",
+
+        "./dataset/side_plank/positive/069.png",
+        "./dataset/side_plank/negative/1_arm_issue/0100.png",
+
+        "./dataset/warrior_ii/positive/0326.png",
+        "./dataset/warrior_ii/negative/0_alignment_issue/frame_0073.png",
     ]
 
     image_list = []

@@ -26,7 +26,7 @@ class PostureCorrectionSystem:
         """
         Initializes the posture correction system by loading the necessary models and setting the device.
         """
-        checkpoint_path = "./checkpoints/27.pth"
+        checkpoint_path = "../checkpoints/27.pth"
 
         # Set the device based on availability
         self.device = torch.device(

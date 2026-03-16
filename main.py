@@ -1,4 +1,4 @@
-from sem2_main import main
+from runners.sem2_main import main
 
 
 if __name__ == "__main__":

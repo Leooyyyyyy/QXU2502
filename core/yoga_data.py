@@ -9,8 +9,8 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from stage3_utils import build_dataset_entries
-from stage3_utils import normalize_keypoints
+from core.stage3_utils import build_dataset_entries
+from core.stage3_utils import normalize_keypoints
 
 DATASET_BASE_PATH = "./dataset"
 CACHE_PREFIX = "stage3_refined"

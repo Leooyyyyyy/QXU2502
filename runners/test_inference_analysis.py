@@ -6,8 +6,11 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from sem2_main import PostureCorrectionSystem
-from stage3_utils import parse_true_label_from_path
+from runners.sem2_main import PostureCorrectionSystem
+from core.stage3_utils import parse_true_label_from_path
+
+from core.models import *
+from core.stage3_utils import *
 
 warnings.filterwarnings("ignore")
 
@@ -59,7 +62,7 @@ def evaluate_row(
 
 
 def main():
-    df_paths = pd.read_csv("test_dataset_paths.csv")
+    df_paths = pd.read_csv("test_dataset_paths_clean.csv")
 
     posture_system = PostureCorrectionSystem()
     rows = []

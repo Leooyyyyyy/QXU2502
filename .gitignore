@@ -26,3 +26,6 @@ benchmark_output/
 # optional: keep local-only experiment scripts out of repo
 # sem2_main.py
 # sem2_train.py
+
+training_plots/
+artifacts/experiments/

@@ -8,18 +8,18 @@ from torch import optim
 from torch.utils.data import DataLoader
 from torch.utils.data import WeightedRandomSampler
 
-import models
-from experiment_configs import get_experiment_config
-from experiment_eval import compute_loss
-from experiment_eval import count_exact_matches
-from experiment_eval import evaluate_model
-from experiment_eval import save_metrics_artifacts
-from experiment_eval import save_per_posture_confusion_matrices
-from experiment_eval import save_training_curves
-from experiment_splits import build_dataset_subsets
-from experiment_splits import create_or_load_fixed_split
-from yoga_data import YogaPoseDataset
-from yoga_data import load_or_build_refined_dataset
+from core import models
+from core.experiment_configs import get_experiment_config
+from core.experiment_eval import compute_loss
+from core.experiment_eval import count_exact_matches
+from core.experiment_eval import evaluate_model
+from core.experiment_eval import save_metrics_artifacts
+from core.experiment_eval import save_per_posture_confusion_matrices
+from core.experiment_eval import save_training_curves
+from core.experiment_splits import build_dataset_subsets
+from core.experiment_splits import create_or_load_fixed_split
+from core.yoga_data import YogaPoseDataset
+from core.yoga_data import load_or_build_refined_dataset
 
 ARTIFACTS_ROOT = "./artifacts/experiments"
 
