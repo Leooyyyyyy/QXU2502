@@ -158,7 +158,7 @@ def save_checkpoint(path, payload):
 def run_experiment(experiment_name: str):
     config = get_experiment_config(experiment_name)
     if config.use_geometric_features:
-        raise NotImplementedError("Geometric feature experiments are not implemented yet. Start with baseline_refined.")
+        raise NotImplementedError("Geometric feature experiments are not implemented yet. Start with phase1.1_baseline_refined.")
 
     dataset_bundle = load_or_build_refined_dataset()
     dataset = YogaPoseDataset(dataset_bundle.keypoints_np, dataset_bundle.labels)
@@ -306,7 +306,9 @@ def run_experiment(experiment_name: str):
     )
 
     metrics = {
-        "experiment_name": config.name,
+        "experiment_key": config.name,
+        "experiment_name": config.display_name,
+        "final_epoch": num_epochs,
         "best_epoch": best_checkpoint["best_epoch"],
         "best_val_loss": best_checkpoint["best_val_loss"],
         "train": train_eval["metrics"],
@@ -326,7 +328,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run a configured yoga classification experiment.")
     parser.add_argument(
         "--experiment",
-        default="baseline_refined",
+        default="phase1.1_baseline_refined",
         help="Experiment name from experiment_configs.py",
     )
     args = parser.parse_args()

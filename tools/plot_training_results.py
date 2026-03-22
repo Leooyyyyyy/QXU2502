@@ -1,180 +1,193 @@
-import warnings
+import argparse
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import torch
-from sklearn.metrics import ConfusionMatrixDisplay
-from sklearn.metrics import confusion_matrix
-from torch.utils.data import DataLoader
-
-from runners.sem2_train import YogaPoseDataset
-from runners.sem2_train import count_correct_predictions
-from runners.sem2_train import load_or_build_preprocessed_dataset
-from runners.sem2_train import loss_func
-from runners.sem2_train import outputs_to_pred_labels
-from runners.sem2_train import split_dataset
-from runners.sem2_train import label_to_confusion_name
-
-warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINT_PATH = PROJECT_ROOT / "checkpoints" / "three_stage_latest.pth"
-OUTPUT_DIR = PROJECT_ROOT / "training_plots"
+EXPERIMENTS_DIR = PROJECT_ROOT / "artifacts" / "experiments"
+
+# Allow torch.load to resolve checkpoints saved with older top-level module paths.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def save_current_figure(filename):
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    plt.savefig(OUTPUT_DIR / filename, bbox_inches="tight")
+def load_checkpoint(experiment_dir: Path):
+    best_checkpoint_path = experiment_dir / "best_checkpoint.pth"
+    last_checkpoint_path = experiment_dir / "last_checkpoint.pth"
+
+    best_checkpoint = None
+    last_checkpoint = None
+
+    if best_checkpoint_path.exists():
+        best_checkpoint = torch.load(best_checkpoint_path, map_location="cpu", weights_only=False)
+    if last_checkpoint_path.exists():
+        last_checkpoint = torch.load(last_checkpoint_path, map_location="cpu", weights_only=False)
+
+    if best_checkpoint is None and last_checkpoint is None:
+        raise FileNotFoundError(f"No checkpoint found in {experiment_dir}")
+
+    return {
+        "best_checkpoint": best_checkpoint,
+        "best_checkpoint_path": best_checkpoint_path if best_checkpoint is not None else None,
+        "last_checkpoint": last_checkpoint,
+        "last_checkpoint_path": last_checkpoint_path if last_checkpoint is not None else None,
+    }
 
 
-def plot_curves(train_losses, val_losses, train_accuracies, val_accuracies):
-    plt.figure(figsize=(12, 6), dpi=220)
-    plt.plot(train_losses, linewidth=2.2, label="Training Loss")
-    plt.plot(val_losses, linewidth=2.2, label="Validation Loss")
-    plt.title("Training and Validation Loss", fontsize=18, pad=14)
-    plt.xlabel("Epochs", fontsize=14)
-    plt.ylabel("Loss", fontsize=14)
+def save_square_curve(
+    values_train,
+    values_val,
+    title,
+    ylabel,
+    output_path: Path,
+    show_plot: bool,
+):
+    plt.figure(figsize=(7.2, 7.2), dpi=220)
+    plt.plot(values_train, linewidth=2.0, label=f"Training {ylabel}")
+    plt.plot(values_val, linewidth=2.0, label=f"Validation {ylabel}")
+    plt.title(title, fontsize=16, pad=12)
+    plt.xlabel("Epochs", fontsize=13)
+    plt.ylabel(ylabel, fontsize=13)
+    if ylabel == "Accuracy":
+        plt.ylim(0, 1.0)
     plt.grid(alpha=0.25)
-    plt.legend(fontsize=13)
+    plt.legend(fontsize=12)
     plt.tight_layout()
-    save_current_figure("training_validation_loss.png")
-    plt.show()
+    plt.savefig(output_path, bbox_inches="tight")
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
 
-    plt.figure(figsize=(12, 6), dpi=220)
-    plt.plot(train_accuracies, linewidth=2.2, label="Training Accuracy")
-    plt.plot(val_accuracies, linewidth=2.2, label="Validation Accuracy")
-    plt.title("Training and Validation Accuracy", fontsize=18, pad=14)
-    plt.xlabel("Epochs", fontsize=14)
-    plt.ylabel("Accuracy", fontsize=14)
-    plt.ylim(0, 1.0)
-    plt.grid(alpha=0.25)
-    plt.legend(fontsize=13)
+
+def save_combined_curve_figure(
+    train_losses,
+    val_losses,
+    train_accuracies,
+    val_accuracies,
+    output_path: Path,
+    show_plot: bool,
+):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 7), dpi=220)
+
+    axes[0].plot(train_losses, linewidth=2.0, label="Training Loss")
+    axes[0].plot(val_losses, linewidth=2.0, label="Validation Loss")
+    axes[0].set_title("Training and Validation Loss", fontsize=16, pad=10)
+    axes[0].set_xlabel("Epochs", fontsize=13)
+    axes[0].set_ylabel("Loss", fontsize=13)
+    axes[0].grid(alpha=0.25)
+    axes[0].legend(fontsize=12)
+
+    axes[1].plot(train_accuracies, linewidth=2.0, label="Training Accuracy")
+    axes[1].plot(val_accuracies, linewidth=2.0, label="Validation Accuracy")
+    axes[1].set_title("Training and Validation Accuracy", fontsize=16, pad=10)
+    axes[1].set_xlabel("Epochs", fontsize=13)
+    axes[1].set_ylabel("Accuracy", fontsize=13)
+    axes[1].set_ylim(0, 1.0)
+    axes[1].grid(alpha=0.25)
+    axes[1].legend(fontsize=12)
+
     plt.tight_layout()
-    save_current_figure("training_validation_accuracy.png")
-    plt.show()
+    plt.savefig(output_path, bbox_inches="tight")
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
 
 
-def print_final_metrics(train_losses, val_losses, train_accuracies, val_accuracies):
+def regenerate_training_plots(experiment_dir: Path, show_plot: bool):
+    checkpoint_bundle = load_checkpoint(experiment_dir)
+    best_checkpoint = checkpoint_bundle["best_checkpoint"]
+    last_checkpoint = checkpoint_bundle["last_checkpoint"] or best_checkpoint
+
+    print(f"Loaded curve checkpoint: {checkpoint_bundle['last_checkpoint_path'] or checkpoint_bundle['best_checkpoint_path']}")
+    if checkpoint_bundle["best_checkpoint_path"] is not None:
+        print(f"Loaded best checkpoint: {checkpoint_bundle['best_checkpoint_path']}")
+
+    train_losses = last_checkpoint["train_losses"]
+    val_losses = last_checkpoint["val_losses"]
+    train_accuracies = last_checkpoint["train_accuracies"]
+    val_accuracies = last_checkpoint["val_accuracies"]
+
+    print(f"Final stopping epoch: {last_checkpoint.get('num_epochs', len(train_losses))}")
+    if best_checkpoint is not None:
+        print(f"Best epoch: {best_checkpoint.get('best_epoch', 'N/A')}")
     print(f"Final training loss: {train_losses[-1]:.4f}")
     print(f"Final validation loss: {val_losses[-1]:.4f}")
     print(f"Final training accuracy: {train_accuracies[-1]:.4f}")
     print(f"Final validation accuracy: {val_accuracies[-1]:.4f}")
 
+    save_square_curve(
+        train_losses,
+        val_losses,
+        "Training and Validation Loss",
+        "Loss",
+        experiment_dir / "training_validation_loss.png",
+        show_plot,
+    )
+    save_square_curve(
+        train_accuracies,
+        val_accuracies,
+        "Training and Validation Accuracy",
+        "Accuracy",
+        experiment_dir / "training_validation_accuracy.png",
+        show_plot,
+    )
+    save_combined_curve_figure(
+        train_losses,
+        val_losses,
+        train_accuracies,
+        val_accuracies,
+        experiment_dir / "training_validation_combined.png",
+        show_plot,
+    )
 
-def plot_confusion_matrix(model, metadata, test_loader, device, label_list):
-    model.eval()
-    test_loss = 0.0
-    test_correct = 0
-    test_true_labels = []
-    test_pred_labels = []
+    print(f"Saved square training plots in: {experiment_dir}")
 
-    with torch.no_grad():
-        for inputs, labels in test_loader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
 
-            outputs = model(inputs)
-            loss = loss_func(outputs, labels, metadata["subtype_counts_by_posture"])
+def experiment_dirs_from_args(args):
+    experiments_dir = Path(args.experiments_dir).resolve() if args.experiments_dir else EXPERIMENTS_DIR
+    if args.all_experiments:
+        return sorted(path for path in experiments_dir.iterdir() if path.is_dir())
 
-            test_loss += loss.item()
-            test_correct += count_correct_predictions(outputs, labels, metadata["subtype_counts_by_posture"])
-            test_true_labels.extend(labels.tolist())
-            test_pred_labels.extend(outputs_to_pred_labels(outputs, metadata["subtype_counts_by_posture"]).tolist())
-
-    avg_test_loss = test_loss / len(test_loader)
-    avg_test_accuracy = test_correct / len(test_loader.dataset)
-    print(f"Test Loss: {avg_test_loss:.4f}, Test Accuracy: {avg_test_accuracy:.4f}")
-
-    for posture_idx, posture_name in enumerate(metadata["posture_names"]):
-        posture_dir = metadata["posture_dirs"][posture_idx]
-        posture_class_names = [f"{posture_name} | Correct"] + [
-            f"{posture_name} | Incorrect | {subtype_name}"
-            for subtype_name in metadata["negative_subtypes_by_posture"][posture_dir]
-        ] + ["Other posture"]
-        posture_class_to_idx = {name: idx for idx, name in enumerate(posture_class_names)}
-
-        filtered_true_indexes = []
-        filtered_pred_indexes = []
-
-        for true_label, pred_label in zip(test_true_labels, test_pred_labels):
-            true_posture_idx = true_label[0]
-            pred_posture_idx = pred_label[0]
-            if true_posture_idx != posture_idx:
-                continue
-
-            true_name = label_to_confusion_name(
-                true_label,
-                metadata["posture_names"],
-                metadata["negative_subtypes_by_posture"],
-                metadata["posture_dirs"],
-            )
-            filtered_true_indexes.append(posture_class_to_idx[true_name])
-
-            if pred_posture_idx == posture_idx:
-                pred_name = label_to_confusion_name(
-                    pred_label,
-                    metadata["posture_names"],
-                    metadata["negative_subtypes_by_posture"],
-                    metadata["posture_dirs"],
-                )
-                filtered_pred_indexes.append(posture_class_to_idx[pred_name])
-            else:
-                filtered_pred_indexes.append(posture_class_to_idx["Other posture"])
-
-        conf_matrix = confusion_matrix(
-            filtered_true_indexes,
-            filtered_pred_indexes,
-            labels=list(range(len(posture_class_names))),
-        )
-
-        fig_size = max(9, min(16, len(posture_class_names) * 1.6))
-        fig, ax = plt.subplots(dpi=220, figsize=(fig_size, fig_size))
-        disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix, display_labels=posture_class_names)
-        disp.plot(cmap=plt.cm.Blues, ax=ax, xticks_rotation=45, colorbar=False, values_format="d")
-        ax.set_title(f"{posture_name} Confusion Matrix", fontsize=18, pad=16)
-        ax.set_xlabel("Predicted Label", fontsize=13, labelpad=12)
-        ax.set_ylabel("True Label", fontsize=13, labelpad=12)
-        ax.tick_params(axis="x", labelsize=10)
-        ax.tick_params(axis="y", labelsize=10)
-        for tick_label in ax.get_xticklabels():
-            tick_label.set_horizontalalignment("right")
-            tick_label.set_rotation_mode("anchor")
-        plt.tight_layout()
-        save_current_figure(f"{posture_name.lower().replace(' ', '_')}_confusion_matrix.png")
-        plt.show()
+    experiment_dir = experiments_dir / args.experiment
+    if not experiment_dir.is_dir():
+        raise FileNotFoundError(f"Experiment folder not found: {experiment_dir}")
+    return [experiment_dir]
 
 
 def main():
-    device = torch.device(
-        "mps" if torch.backends.mps.is_available()
-        else "cuda" if torch.cuda.is_available()
-        else "cpu"
+    parser = argparse.ArgumentParser(
+        description="Regenerate square-format training loss/accuracy plots from saved experiment checkpoints."
     )
-
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
-    model = checkpoint["model"].to(device).eval()
-    metadata = checkpoint["metadata"]
-
-    print_final_metrics(
-        checkpoint["train_losses"],
-        checkpoint["val_losses"],
-        checkpoint["train_accuracies"],
-        checkpoint["val_accuracies"],
+    parser.add_argument(
+        "--experiment",
+        default="phase2_baseline_refined_earlystop",
+        help="Experiment folder name inside artifacts/experiments",
     )
-
-    plot_curves(
-        checkpoint["train_losses"],
-        checkpoint["val_losses"],
-        checkpoint["train_accuracies"],
-        checkpoint["val_accuracies"],
+    parser.add_argument(
+        "--all-experiments",
+        action="store_true",
+        help="Regenerate the training plots for all experiment folders",
     )
+    parser.add_argument(
+        "--experiments-dir",
+        default="",
+        help="Optional path to an experiments directory. Defaults to project artifacts/experiments",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Show the plots interactively in addition to saving them",
+    )
+    args = parser.parse_args()
 
-    keypoints_np, label_list, _, _ = load_or_build_preprocessed_dataset()
-    dataset = YogaPoseDataset(keypoints_np, label_list)
-    _, _, test_dataset = split_dataset(dataset)
-    test_loader = DataLoader(test_dataset, batch_size=32)
-
-    plot_confusion_matrix(model, metadata, test_loader, device, label_list)
+    for experiment_dir in experiment_dirs_from_args(args):
+        print()
+        print(f"Processing experiment: {experiment_dir.name}")
+        regenerate_training_plots(experiment_dir, show_plot=args.show)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ExperimentConfig:
     name: str
+    display_name: str
     split_name: str
     seed: int = 2024
     train_ratio: float = 0.7
@@ -28,14 +29,14 @@ class ExperimentConfig:
 
 
 # The registry order below matches the intended experiment stage order for the project:
-# 1. baseline_refined
-# 2. baseline_refined_earlystop
-# 3.1 baseline_refined_weighted_loss
-# 3.2 baseline_refined_weighted_sampler
-# 3.3 baseline_refined_weighted_both
-# 4.1 baseline_refined_weighted_loss_earlystop
-# 4.2 baseline_refined_weighted_sampler_earlystop
-# 4.3 baseline_refined_weighted_both_earlystop
+# 1. phase1.1_baseline_refined
+# 2. phase2_baseline_refined_earlystop
+# 3.1 phase3.1_baseline_refined_weighted_loss
+# 3.2 phase3.2_baseline_refined_weighted_sampler
+# 3.3 phase3.3_baseline_refined_weighted_both
+# 4.1 phase4.1_baseline_refined_weighted_loss_earlystop
+# 4.2 phase4.2_baseline_refined_weighted_sampler_earlystop
+# 4.3 phase4.3_baseline_refined_weighted_both_earlystop
 # 5. baseline_refined_weighted_both_earlystop_geom
 #
 # Notes:
@@ -44,52 +45,60 @@ class ExperimentConfig:
 #   not implemented in the training pipeline.
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     # Stage 1: refined dataset baseline with the current stable training setup.
-    "baseline_refined": ExperimentConfig(
-        name="baseline_refined",
+    "phase1.1_baseline_refined": ExperimentConfig(
+        name="phase1.1_baseline_refined",
+        display_name="Phase 1.1: Baseline After Dataset Refinement",
         split_name="refined_split_seed2024",
     ),
     # Stage 2: same as the refined baseline, but with early stopping enabled.
-    "baseline_refined_earlystop": ExperimentConfig(
-        name="baseline_refined_earlystop",
+    "phase2_baseline_refined_earlystop": ExperimentConfig(
+        name="phase2_baseline_refined_earlystop",
+        display_name="Phase 2: Early Stopping on the Refined Baseline",
         split_name="refined_split_seed2024",
         use_early_stopping=True,
     ),
     # Stage 3.1: only class-weighted loss, without weighted sampling.
-    "baseline_refined_weighted_loss": ExperimentConfig(
-        name="baseline_refined_weighted_loss",
+    "phase3.1_baseline_refined_weighted_loss": ExperimentConfig(
+        name="phase3.1_baseline_refined_weighted_loss",
+        display_name="Phase 3.1: phase3.1_baseline_refined_weighted_loss",
         split_name="refined_split_seed2024",
         use_class_weighted_loss=True,
     ),
     # Stage 3.2: only weighted sampling, without class-weighted loss.
-    "baseline_refined_weighted_sampler": ExperimentConfig(
-        name="baseline_refined_weighted_sampler",
+    "phase3.2_baseline_refined_weighted_sampler": ExperimentConfig(
+        name="phase3.2_baseline_refined_weighted_sampler",
+        display_name="Phase 3.2: phase3.2_baseline_refined_weighted_sampler",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
     ),
     # Stage 3.3: weighted sampling + class-weighted loss together.
-    "baseline_refined_weighted_both": ExperimentConfig(
-        name="baseline_refined_weighted_both",
+    "phase3.3_baseline_refined_weighted_both": ExperimentConfig(
+        name="phase3.3_baseline_refined_weighted_both",
+        display_name="Phase 3.3: phase3.3_baseline_refined_weighted_both",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
         use_class_weighted_loss=True,
     ),
     # Stage 4.1: weighted-loss-only + early stopping.
-    "baseline_refined_weighted_loss_earlystop": ExperimentConfig(
-        name="baseline_refined_weighted_loss_earlystop",
+    "phase4.1_baseline_refined_weighted_loss_earlystop": ExperimentConfig(
+        name="phase4.1_baseline_refined_weighted_loss_earlystop",
+        display_name="Phase 4.1: phase4.1_baseline_refined_weighted_loss_earlystop",
         split_name="refined_split_seed2024",
         use_class_weighted_loss=True,
         use_early_stopping=True,
     ),
     # Stage 4.2: weighted-sampler-only + early stopping.
-    "baseline_refined_weighted_sampler_earlystop": ExperimentConfig(
-        name="baseline_refined_weighted_sampler_earlystop",
+    "phase4.2_baseline_refined_weighted_sampler_earlystop": ExperimentConfig(
+        name="phase4.2_baseline_refined_weighted_sampler_earlystop",
+        display_name="Phase 4.2: phase4.2_baseline_refined_weighted_sampler_earlystop",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
         use_early_stopping=True,
     ),
     # Stage 4.3: weighted sampler + class-weighted loss + early stopping.
-    "baseline_refined_weighted_both_earlystop": ExperimentConfig(
-        name="baseline_refined_weighted_both_earlystop",
+    "phase4.3_baseline_refined_weighted_both_earlystop": ExperimentConfig(
+        name="phase4.3_baseline_refined_weighted_both_earlystop",
+        display_name="Phase 4.3: phase4.3_baseline_refined_weighted_both_earlystop",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
         use_class_weighted_loss=True,
@@ -98,6 +107,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
     # Backward-compatible alias for the previous Stage 4 name.
     "baseline_refined_weighted_earlystop": ExperimentConfig(
         name="baseline_refined_weighted_earlystop",
+        display_name="Legacy Alias: Phase 4.3: phase4.3_baseline_refined_weighted_both_earlystop",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
         use_class_weighted_loss=True,
@@ -107,6 +117,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
     # Registered now, but geometric features are not implemented yet.
     "baseline_refined_weighted_both_earlystop_geom": ExperimentConfig(
         name="baseline_refined_weighted_both_earlystop_geom",
+        display_name="Phase 5: baseline_refined_weighted_both_earlystop_geom",
         split_name="refined_split_seed2024",
         use_weighted_sampler=True,
         use_class_weighted_loss=True,
