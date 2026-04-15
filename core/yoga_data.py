@@ -26,15 +26,35 @@ class DatasetBundle:
 
 
 class YogaPoseDataset(Dataset):
-    def __init__(self, keypoints_np: np.ndarray, labels: list[list[int]]):
+    def __init__(
+        self,
+        keypoints_np: np.ndarray,
+        labels: list[list[int]],
+        use_coordinate_jitter: bool = False,
+        coordinate_jitter_std: float = 0.0,
+        coordinate_jitter_prob: float = 0.0,
+    ):
         self.keypoints_tensor = torch.tensor(keypoints_np, dtype=torch.float32)
         self.labels = torch.tensor(labels, dtype=torch.long)
+        self.use_coordinate_jitter = use_coordinate_jitter
+        self.coordinate_jitter_std = coordinate_jitter_std
+        self.coordinate_jitter_prob = coordinate_jitter_prob
 
     def __len__(self) -> int:
         return len(self.keypoints_tensor)
 
     def __getitem__(self, idx: int):
-        return self.keypoints_tensor[idx], self.labels[idx]
+        keypoints = self.keypoints_tensor[idx]
+
+        if self.use_coordinate_jitter and self.coordinate_jitter_std > 0 and torch.rand(1).item() < self.coordinate_jitter_prob:
+            keypoints = keypoints.clone()
+            noise = torch.randn_like(keypoints[:, :3]) * self.coordinate_jitter_std
+            keypoints[:, :3] = keypoints[:, :3] + noise
+            keypoints[:, 0] = torch.clamp(keypoints[:, 0], min=0.0, max=1.0)
+            keypoints[:, 1] = torch.clamp(keypoints[:, 1], min=0.0, max=1.0)
+            keypoints[:, 2] = torch.clamp(keypoints[:, 2], min=-1.0, max=1.0)
+
+        return keypoints, self.labels[idx]
 
 
 def _cache_paths(cache_prefix: str) -> dict[str, str]:

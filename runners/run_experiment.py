@@ -161,7 +161,6 @@ def run_experiment(experiment_name: str):
         raise NotImplementedError("Geometric feature experiments are not implemented yet. Start with phase1.1_baseline_refined.")
 
     dataset_bundle = load_or_build_refined_dataset()
-    dataset = YogaPoseDataset(dataset_bundle.keypoints_np, dataset_bundle.labels)
     split_bundle = create_or_load_fixed_split(
         dataset_bundle.labels,
         split_name=config.split_name,
@@ -169,9 +168,21 @@ def run_experiment(experiment_name: str):
         val_ratio=config.val_ratio,
         seed=config.seed,
     )
-    train_dataset, val_dataset, test_dataset = build_dataset_subsets(dataset, split_bundle)
+    base_dataset = YogaPoseDataset(dataset_bundle.keypoints_np, dataset_bundle.labels)
+    train_source_dataset = YogaPoseDataset(
+        dataset_bundle.keypoints_np,
+        dataset_bundle.labels,
+        use_coordinate_jitter=config.use_coordinate_jitter,
+        coordinate_jitter_std=config.coordinate_jitter_std,
+        coordinate_jitter_prob=config.coordinate_jitter_prob,
+    )
+    train_dataset, _, _ = build_dataset_subsets(train_source_dataset, split_bundle)
+    _, val_dataset, test_dataset = build_dataset_subsets(base_dataset, split_bundle)
 
-    train_loader_kwargs = {"batch_size": config.batch_size}
+    train_loader_kwargs = {
+        "batch_size": config.batch_size,
+        "generator": torch.Generator().manual_seed(config.seed),
+    }
     if config.use_weighted_sampler:
         train_loader_kwargs["sampler"] = build_weighted_sampler(train_dataset)
     else:

@@ -23,6 +23,9 @@ class ExperimentConfig:
     use_early_stopping: bool = False
     early_stopping_patience: int = 30
     use_geometric_features: bool = False
+    use_coordinate_jitter: bool = False
+    coordinate_jitter_std: float = 0.01
+    coordinate_jitter_prob: float = 0.5
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -30,6 +33,8 @@ class ExperimentConfig:
 
 # The registry order below matches the intended experiment stage order for the project:
 # 1. phase1.1_baseline_refined
+# 1.2 phase1.2_baseline_refined
+# comparison_refined_final_baseline_coordinate_jitter
 # 2. phase2_baseline_refined_earlystop
 # 3.1 phase3.1_baseline_refined_weighted_loss
 # 3.2 phase3.2_baseline_refined_weighted_sampler
@@ -49,6 +54,19 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
         name="phase1.1_baseline_refined",
         display_name="Phase 1.1: Baseline After Dataset Refinement",
         split_name="refined_split_seed2024",
+    ),
+    "phase1.2_baseline_refined": ExperimentConfig(
+        name="phase1.2_baseline_refined",
+        display_name="Phase 1.2: Baseline After Warrior II Refinement",
+        split_name="refined_split_seed2024",
+    ),
+    "comparison_refined_final_baseline_coordinate_jitter": ExperimentConfig(
+        name="comparison_refined_final_baseline_coordinate_jitter",
+        display_name="Comparison: Final Refined Baseline with Coordinate Jitter",
+        split_name="refined_split_seed2024",
+        use_coordinate_jitter=True,
+        coordinate_jitter_std=0.01,
+        coordinate_jitter_prob=0.5,
     ),
     # Stage 2: same as the refined baseline, but with early stopping enabled.
     "phase2_baseline_refined_earlystop": ExperimentConfig(
